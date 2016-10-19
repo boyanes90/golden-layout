@@ -1,6 +1,6 @@
 
 lm.utils.F = function () {};
-	
+
 lm.utils.extend = function( subClass, superClass ) {
 	subClass.prototype = lm.utils.createObject( superClass.prototype );
 	subClass.prototype.contructor = subClass;
@@ -29,8 +29,15 @@ lm.utils.objectKeys = function( object ) {
 	}
 };
 
+lm.utils.getHashValue = function(key) {
+	var matches = location.hash.match(new RegExp(key+'=([^&]*)'));
+	return matches ? matches[1] : null;
+};
+
 lm.utils.getQueryStringParam = function( param ) {
-	if( !window.location.search ) {
+	if (window.location.hash){
+		return lm.utils.getHashValue(param);
+	} else if ( !window.location.search ) {
 		return null;
 	}
 
@@ -56,7 +63,7 @@ lm.utils.copy = function( target, source ) {
 
 /**
  * This is based on Paul Irish's shim, but looks quite odd in comparison. Why?
- * Because 
+ * Because
  * a) it shouldn't affect the global requestAnimationFrame function
  * b) it shouldn't pass on the time that has passed
  *
@@ -79,7 +86,7 @@ lm.utils.indexOf = function( needle, haystack ) {
 	if( !( haystack instanceof Array ) ) {
 		throw new Error( 'Haystack is not an Array' );
 	}
-	
+
 	if( haystack.indexOf ) {
 		return haystack.indexOf( needle );
 	} else {
@@ -142,7 +149,7 @@ lm.utils.getUniqueId = function() {
 
 /**
  * A basic XSS filter. It is ultimately up to the
- * implementing developer to make sure their particular 
+ * implementing developer to make sure their particular
  * applications and usecases are save from cross site scripting attacks
  *
  * @param   {String} input
@@ -151,7 +158,7 @@ lm.utils.getUniqueId = function() {
  * @returns {String} filtered input
  */
 lm.utils.filterXss = function( input, keepTags ) {
-	
+
 	var output = input
 		.replace( /javascript/gi, 'j&#97;vascript' )
 		.replace( /expression/gi, 'expr&#101;ssion' )
