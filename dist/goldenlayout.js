@@ -1356,6 +1356,11 @@ lm.utils.copy( lm.LayoutManager.prototype, {
 	}
 })();
 
+lm.config.itemDefaultConfig = {
+	isClosable: true,
+	reorderEnabled: true,
+	title: ''
+};
 lm.config.defaultConfig = {
 	openPopouts:[],
 	settings:{
@@ -1385,11 +1390,6 @@ lm.config.defaultConfig = {
 		popout: 'open in new window',
 		popin: 'pop in'
 	}
-};
-lm.config.itemDefaultConfig = {
-	isClosable: true,
-	reorderEnabled: true,
-	title: ''
 };
 lm.container.ItemContainer = function( config, parent, layoutManager ) {
 	lm.utils.EventEmitter.call( this );
@@ -1843,7 +1843,7 @@ lm.utils.copy( lm.controls.BrowserPopout.prototype, {
  *
  * @param {Number} x              The initial x position
  * @param {Number} y              The initial y position
- * @param {lm.utils.DragListener} dragListener   
+ * @param {lm.utils.DragListener} dragListener
  * @param {lm.LayoutManager} layoutManager
  * @param {lm.item.AbstractContentItem} contentItem
  * @param {lm.item.AbstractContentItem} originalParent
@@ -1865,6 +1865,7 @@ lm.controls.DragProxy = function( x, y, dragListener, layoutManager, contentItem
 
 	this.element = $( lm.controls.DragProxy._template );
 	this.element.css({ left: x, top: y });
+	this.element.find( '.lm_tab' ).attr( 'title', lm.utils.stripTags( this._contentItem.config.title ) );
 	this.element.find( '.lm_title' ).html( this._contentItem.config.title );
 	this.childElementContainer = this.element.find( '.lm_content' );
 	this.childElementContainer.append( contentItem.element );
@@ -1883,18 +1884,20 @@ lm.controls.DragProxy = function( x, y, dragListener, layoutManager, contentItem
 	this._maxY = this._layoutManager.container.height() + this._minY;
 	this._width = this.element.width();
 	this._height = this.element.height();
+
+	this._setDropPosition( x, y );
 };
 
 lm.controls.DragProxy._template = '<div class="lm_dragProxy">' +
-									'<div class="lm_header">' +
-										'<ul class="lm_tabs">' +
-											'<li class="lm_tab lm_active"><i class="lm_left"></i>' +
-											'<span class="lm_title"></span>' +
-											'<i class="lm_right"></i></li>' +
-										'</ul>' +
-									'</div>' +
-									'<div class="lm_content"></div>' +
-								'</div>';
+		'<div class="lm_header">' +
+		'<ul class="lm_tabs">' +
+		'<li class="lm_tab lm_active"><i class="lm_left"></i>' +
+		'<span class="lm_title"></span>' +
+		'<i class="lm_right"></i></li>' +
+		'</ul>' +
+		'</div>' +
+		'<div class="lm_content"></div>' +
+		'</div>';
 
 lm.utils.copy( lm.controls.DragProxy.prototype, {
 
@@ -1913,22 +1916,36 @@ lm.utils.copy( lm.controls.DragProxy.prototype, {
 	 */
 	_onDrag: function( offsetX, offsetY, event ) {
 		var x = event.pageX,
-			y = event.pageY,
-			isWithinContainer = x > this._minX && x < this._maxX && y > this._minY && y < this._maxY;
-	
+				y = event.pageY,
+				isWithinContainer = x > this._minX && x < this._maxX && y > this._minY && y < this._maxY;
+
 		if( !isWithinContainer && this._layoutManager.config.settings.constrainDragToContainer === true ) {
 			return;
 		}
-	
+
+		this._setDropPosition( x, y );
+	},
+
+	/**
+	 * Sets the target position, highlighting the appropriate area
+	 *
+	 * @param   {Number} x The x position in px
+	 * @param   {Number} y The y position in px
+	 *
+	 * @private
+	 *
+	 * @returns {void}
+	 */
+	_setDropPosition: function( x, y ) {
 		this.element.css({ left: x, top: y });
 		this._area = this._layoutManager._$getArea( x, y );
-	
+
 		if( this._area !== null ) {
 			this._lastValidArea = this._area;
 			this._area.contentItem._$highlightDropZone( x, y, this._area );
 		}
 	},
-	
+
 	/**
 	 * Callback when the drag has finished. Determines the drop area
 	 * and adds the child to it
@@ -1946,25 +1963,35 @@ lm.utils.copy( lm.controls.DragProxy.prototype, {
 		if( this._area !== null ) {
 			this._area.contentItem._$onDrop( this._contentItem );
 
-		/**
-		 * No valid drop area available at present, but one has been found before.
-		 * Use it
-		 */
+			/**
+			 * No valid drop area available at present, but one has been found before.
+			 * Use it
+			 */
 		} else if( this._lastValidArea !== null ) {
 			this._lastValidArea.contentItem._$onDrop( this._contentItem );
 
-		/**
-		 * No valid drop area found during the duration of the drag. Return
-		 * content item to its original position if a original parent is provided.
-		 * (Which is not the case if the drag had been initiated by createDragSource)
-		 */
+			/**
+			 * No valid drop area found during the duration of the drag. Return
+			 * content item to its original position if a original parent is provided.
+			 * (Which is not the case if the drag had been initiated by createDragSource)
+			 */
 		} else if ( this._originalParent ){
 			this._originalParent.addChild( this._contentItem );
+
+			/**
+			 * The drag didn't ultimately end up with adding the content item to
+			 * any container. In order to ensure clean up happens, destroy the
+			 * content item.
+			 */
+		} else {
+			this._contentItem._$destroy();
 		}
-		
+
 		this.element.remove();
+
+		this._layoutManager.emit( 'itemDropped', this._contentItem );
 	},
-	
+
 	/**
 	 * Removes the item from it's original position within the tree
 	 *
@@ -1973,17 +2000,17 @@ lm.utils.copy( lm.controls.DragProxy.prototype, {
 	 * @returns {void}
 	 */
 	_updateTree: function() {
-		
+
 		/**
 		 * parent is null if the drag had been initiated by a external drag source
 		 */
 		if( this._contentItem.parent ) {
 			this._contentItem.parent.removeChild( this._contentItem, true );
 		}
-		
+
 		this._contentItem._$setParent( this );
 	},
-	
+
 	/**
 	 * Updates the Drag Proxie's dimensions
 	 *
@@ -1993,9 +2020,9 @@ lm.utils.copy( lm.controls.DragProxy.prototype, {
 	 */
 	_setDimensions: function() {
 		var dimensions = this._layoutManager.config.dimensions,
-			width = dimensions.dragProxyWidth,
-			height = dimensions.dragProxyHeight - dimensions.headerHeight;
-	
+				width = dimensions.dragProxyWidth,
+				height = dimensions.dragProxyHeight - dimensions.headerHeight;
+
 		this.childElementContainer.width( width );
 		this.childElementContainer.height( height );
 		this._contentItem.element.width( width );
@@ -2621,6 +2648,434 @@ lm.errors.ConfigurationError = function( message, node ) {
 
 lm.errors.ConfigurationError.prototype = new Error();
 
+lm.utils.BubblingEvent = function( name, origin ) {
+	this.name = name;
+	this.origin = origin;
+	this.isPropagationStopped = false;
+};
+
+lm.utils.BubblingEvent.prototype.stopPropagation = function() {
+	this.isPropagationStopped = true;
+};
+/**
+ * Minifies and unminifies configs by replacing frequent keys
+ * and values with one letter substitutes
+ *
+ * @constructor
+ */
+lm.utils.ConfigMinifier = function(){
+	this._keys = [
+		'settings',
+		'hasHeaders',
+		'constrainDragToContainer',
+		'selectionEnabled',
+		'dimensions',
+		'borderWidth',
+		'minItemHeight',
+		'minItemWidth',
+		'headerHeight',
+		'dragProxyWidth',
+		'dragProxyHeight',
+		'labels',
+		'close',
+		'maximise',
+		'minimise',
+		'popout',
+		'content',
+		'componentName',
+		'componentState',
+		'id',
+		'width',
+		'type',
+		'height',
+		'isClosable',
+		'title',
+		'popoutWholeStack',
+		'openPopouts',
+		'parentId',
+		'activeItemIndex',
+		'reorderEnabled'
+
+
+
+
+
+		//Maximum 36 entries, do not cross this line!
+	];
+
+	this._values = [
+		true,
+		false,
+		'row',
+		'column',
+		'stack',
+		'component',
+		'close',
+		'maximise',
+		'minimise',
+		'open in new window'
+	];
+};
+
+lm.utils.copy( lm.utils.ConfigMinifier.prototype, {
+
+	/**
+	 * Takes a GoldenLayout configuration object and
+	 * replaces its keys and values recoursively with
+	 * one letter counterparts
+	 *
+	 * @param   {Object} config A GoldenLayout config object
+	 *
+	 * @returns {Object} minified config
+	 */
+	minifyConfig: function( config ) {
+		var min = {};
+		this._nextLevel( config, min, '_min' );
+		return min;
+	},
+
+	/**
+	 * Takes a configuration Object that was previously minified
+	 * using minifyConfig and returns its original version
+	 *
+	 * @param   {Object} minifiedConfig
+	 *
+	 * @returns {Object} the original configuration
+	 */
+	unminifyConfig: function( minifiedConfig ) { 
+		var orig = {};
+		this._nextLevel( minifiedConfig, orig, '_max' );
+		return orig;
+	},
+
+	/**
+	 * Recoursive function, called for every level of the config structure
+	 *
+	 * @param   {Array|Object} orig
+	 * @param   {Array|Object} min
+	 * @param 	{String} translationFn
+	 *
+	 * @returns {void}
+	 */
+	_nextLevel: function( from, to, translationFn ) {
+		var key, minKey;
+
+		for( key in from ) {
+
+			/**
+			 * For in returns array indices as keys, so let's cast them to numbers
+			 */
+			if( from instanceof Array ) key = parseInt( key, 10 );
+
+			/**
+			 * In case something has extended Object prototypes
+			 */
+			if( !from.hasOwnProperty( key ) ) continue;
+
+			/**
+			 * Translate the key to a one letter substitute
+			 */
+			minKey = this[ translationFn ]( key, this._keys );
+
+			/**
+			 * For Arrays and Objects, create a new Array/Object
+			 * on the minified object and recourse into it
+			 */
+			if( typeof from[ key ] === 'object' ) {
+				to[ minKey ] = from[ key ] instanceof Array ? [] : {};
+				this._nextLevel( from[ key ], to[ minKey ], translationFn );
+
+			/**
+			 * For primitive values (Strings, Numbers, Boolean etc.)
+			 * minify the value
+			 */
+			} else {
+				to[ minKey ] = this[ translationFn ]( from[ key ], this._values );
+			}
+		}
+	},
+
+	/**
+	 * Minifies value based on a dictionary
+	 *
+	 * @param   {String|Boolean} value
+	 * @param   {Array<String|Boolean>} dictionary
+	 *
+	 * @returns {String} The minified version
+	 */
+	_min: function( value, dictionary ) {
+		/**
+		 * If a value actually is a single character, prefix it
+		 * with ___ to avoid mistaking it for a minification code
+		 */
+		if( typeof value === 'string' && value.length === 1 ) {
+			return '___' + value;
+		}
+
+		var index = lm.utils.indexOf( value, dictionary );
+		
+		/**
+		 * value not found in the dictionary, return it unmodified
+		 */
+		if( index === -1 ) {
+			return value;
+
+		/**
+		 * value found in dictionary, return its base36 counterpart
+		 */
+		} else {
+			return index.toString( 36 );
+		}
+	},
+
+	_max: function( value, dictionary ) {
+		/**
+		 * value is a single character. Assume that it's a translation
+		 * and return the original value from the dictionary
+		 */
+		if( typeof value === 'string' && value.length === 1 ) {
+			return dictionary[ parseInt( value, 36 ) ];
+		}
+
+		/**
+		 * value originally was a single character and was prefixed with ___
+		 * to avoid mistaking it for a translation. Remove the prefix
+		 * and return the original character
+		 */
+		if( typeof value === 'string' && value.substr( 0, 3 ) === '___' ) {
+			return value[ 3 ];
+		}
+		/**
+		 * value was not minified
+		 */
+		return value;
+	}
+});
+
+/**
+ * An EventEmitter singleton that propagates events
+ * across multiple windows. This is a little bit trickier since
+ * windows are allowed to open childWindows in their own right
+ *
+ * This means that we deal with a tree of windows. Hence the rules for event propagation are:
+ *
+ * - Propagate events from this layout to both parents and children
+ * - Propagate events from parent to this and children
+ * - Propagate events from children to the other children (but not the emitting one) and the parent
+ *
+ * @constructor
+ * 
+ * @param {lm.LayoutManager} layoutManager
+ */
+lm.utils.EventHub = function( layoutManager ) {
+	lm.utils.EventEmitter.call( this );
+	this._layoutManager = layoutManager;
+	this._dontPropagateToParent = null;
+	this._childEventSource = null;
+	this.on( lm.utils.EventEmitter.ALL_EVENT, lm.utils.fnBind( this._onEventFromThis, this ) );
+	$(window).on( 'gl_child_event', lm.utils.fnBind( this._onEventFromChild, this ) );
+};
+
+/**
+ * Called on every event emitted on this eventHub, regardles of origin.
+ *
+ * @private
+ *
+ * @param {Mixed}
+ * 
+ * @returns {void}
+ */
+lm.utils.EventHub.prototype._onEventFromThis = function() {
+	var args = Array.prototype.slice.call( arguments );
+
+	if( this._layoutManager.isSubWindow && args[ 0 ] !== this._dontPropagateToParent ) {
+		this._propagateToParent( args );
+	}
+	this._propagateToChildren( args );
+
+	//Reset
+	this._dontPropagateToParent = null;
+	this._childEventSource = null;
+};
+
+/**
+ * Called by the parent layout.
+ *
+ * @param   {Array} args Event name + arguments
+ *
+ * @returns {void}
+ */
+lm.utils.EventHub.prototype._$onEventFromParent = function( args ) {
+	this._dontPropagateToParent = args[ 0 ];
+	this.emit.apply( this, args );
+};
+
+/**
+ * Callback for child events raised on the window
+ *
+ * @param   {DOMEvent} event
+ * @private
+ *
+ * @returns {void}
+ */
+lm.utils.EventHub.prototype._onEventFromChild = function( event ) {
+	this._childEventSource = event.originalEvent.__gl;
+	this.emit.apply( this, event.originalEvent.__glArgs );
+};
+
+/**
+ * Propagates the event to the parent by emitting
+ * it on the parent's DOM window
+ *
+ * @param   {Array} args Event name + arguments
+ * @private
+ *
+ * @returns {void}
+ */
+lm.utils.EventHub.prototype._propagateToParent = function( args ) {
+	var event,
+		eventName = 'gl_child_event'; 
+
+	if (document.createEvent) {
+		event = window.opener.document.createEvent( 'HTMLEvents' );
+		event.initEvent( eventName, true, true);
+	} else {
+		event = window.opener.document.createEventObject();
+		event.eventType = eventName;
+	}
+
+	event.eventName = eventName;
+	event.__glArgs = args;
+	event.__gl = this._layoutManager;
+
+	if (document.createEvent) {
+		window.opener.dispatchEvent(event);
+	} else {
+		window.opener.fireEvent( 'on' + event.eventType, event );
+	}
+};
+
+/**
+ * Propagate events to children
+ *
+ * @param   {Array} args Event name + arguments
+ * @private
+ *
+ * @returns {void}
+ */
+lm.utils.EventHub.prototype._propagateToChildren = function( args ) {
+	var childGl, i;
+
+	for( i = 0; i < this._layoutManager.openPopouts.length; i++ ) {
+		childGl = this._layoutManager.openPopouts[ i ].getGlInstance();
+
+		if( childGl !== this._childEventSource ) {
+			childGl.eventHub._$onEventFromParent( args );
+		}
+	}
+};
+/**
+ * A specialised GoldenLayout component that binds GoldenLayout container
+ * lifecycle events to react components
+ *
+ * @constructor
+ *
+ * @param {lm.container.ItemContainer} container
+ * @param {Object} state state is not required for react components
+ */
+lm.utils.ReactComponentHandler = function( container, state ) {
+	this._reactComponent = null;
+	this._originalComponentWillUpdate = null;
+	this._container = container;
+	this._initialState = state;
+	this._reactClass = this._getReactClass();
+	this._container.on( 'open', this._render, this );
+	this._container.on( 'destroy', this._destroy, this );
+};
+
+lm.utils.copy( lm.utils.ReactComponentHandler.prototype, {
+
+	/**
+	 * Creates the react class and component and hydrates it with
+	 * the initial state - if one is present
+	 *
+	 * By default, react's getInitialState will be used
+	 *
+	 * @private
+	 * @returns {void}
+	 */
+	_render: function() {
+		this._reactComponent = ReactDOM.render( this._getReactComponent(), this._container.getElement()[ 0 ]);
+		this._originalComponentWillUpdate = this._reactComponent.componentWillUpdate || function(){};
+		this._reactComponent.componentWillUpdate = this._onUpdate.bind( this );
+		if( this._container.getState() ) {
+			this._reactComponent.setState( this._container.getState() );
+		}
+	},
+
+	/**
+	 * Removes the component from the DOM and thus invokes React's unmount lifecycle
+	 *
+	 * @private
+	 * @returns {void}
+	 */
+	_destroy: function() {
+		ReactDOM.unmountComponentAtNode( this._container.getElement()[ 0 ]);
+		this._container.off( 'open', this._render, this );
+		this._container.off( 'destroy', this._destroy, this );
+	},
+
+	/**
+	 * Hooks into React's state management and applies the componentstate
+	 * to GoldenLayout
+	 *
+	 * @private
+	 * @returns {void}
+	 */
+	_onUpdate: function( nextProps, nextState ) {
+		this._container.setState( nextState );
+		this._originalComponentWillUpdate.call( this._reactComponent, nextProps, nextState );
+	},
+
+	/**
+	 * Retrieves the react class from GoldenLayout's registry
+	 *
+	 * @private
+	 * @returns {React.Class}
+	 */
+	_getReactClass: function() {
+		var componentName = this._container._config.component;
+		var reactClass;
+
+		if( !componentName ) {
+			throw new Error( 'No react component name. type: react-component needs a field `component`' );
+		}
+
+		reactClass = this._container.layoutManager.getComponent( componentName );
+
+		if( !reactClass ) {
+			throw new Error( 'React component "' + componentName + '" not found. ' +
+				'Please register all components with GoldenLayout using `registerComponent(name, component)`' );
+		}
+
+		return reactClass;
+	},
+
+	/**
+	 * Copies and extends the properties array and returns the React element
+	 *
+	 * @private
+	 * @returns {React.Element}
+	 */
+	_getReactComponent: function() {
+		var defaultProps = {
+			glEventHub: this._container.layoutManager.eventHub,
+			glContainer: this._container,
+		};
+		var props = $.extend( defaultProps, this._container._config.props );
+		return React.createElement( this._reactClass, props );
+	}
+});
 
 /**
  * This is the baseclass that all content items inherit from.
@@ -4206,432 +4661,4 @@ lm.utils.copy( lm.items.Stack.prototype, {
 		this._dropSegment = segment;
 	}
 });
-
-lm.utils.BubblingEvent = function( name, origin ) {
-	this.name = name;
-	this.origin = origin;
-	this.isPropagationStopped = false;
-};
-
-lm.utils.BubblingEvent.prototype.stopPropagation = function() {
-	this.isPropagationStopped = true;
-};
-/**
- * Minifies and unminifies configs by replacing frequent keys
- * and values with one letter substitutes
- *
- * @constructor
- */
-lm.utils.ConfigMinifier = function(){
-	this._keys = [
-		'settings',
-		'hasHeaders',
-		'constrainDragToContainer',
-		'selectionEnabled',
-		'dimensions',
-		'borderWidth',
-		'minItemHeight',
-		'minItemWidth',
-		'headerHeight',
-		'dragProxyWidth',
-		'dragProxyHeight',
-		'labels',
-		'close',
-		'maximise',
-		'minimise',
-		'popout',
-		'content',
-		'componentName',
-		'componentState',
-		'id',
-		'width',
-		'type',
-		'height',
-		'isClosable',
-		'title',
-		'popoutWholeStack',
-		'openPopouts',
-		'parentId',
-		'activeItemIndex',
-		'reorderEnabled'
-
-
-
-
-
-		//Maximum 36 entries, do not cross this line!
-	];
-
-	this._values = [
-		true,
-		false,
-		'row',
-		'column',
-		'stack',
-		'component',
-		'close',
-		'maximise',
-		'minimise',
-		'open in new window'
-	];
-};
-
-lm.utils.copy( lm.utils.ConfigMinifier.prototype, {
-
-	/**
-	 * Takes a GoldenLayout configuration object and
-	 * replaces its keys and values recoursively with
-	 * one letter counterparts
-	 *
-	 * @param   {Object} config A GoldenLayout config object
-	 *
-	 * @returns {Object} minified config
-	 */
-	minifyConfig: function( config ) {
-		var min = {};
-		this._nextLevel( config, min, '_min' );
-		return min;
-	},
-
-	/**
-	 * Takes a configuration Object that was previously minified
-	 * using minifyConfig and returns its original version
-	 *
-	 * @param   {Object} minifiedConfig
-	 *
-	 * @returns {Object} the original configuration
-	 */
-	unminifyConfig: function( minifiedConfig ) { 
-		var orig = {};
-		this._nextLevel( minifiedConfig, orig, '_max' );
-		return orig;
-	},
-
-	/**
-	 * Recoursive function, called for every level of the config structure
-	 *
-	 * @param   {Array|Object} orig
-	 * @param   {Array|Object} min
-	 * @param 	{String} translationFn
-	 *
-	 * @returns {void}
-	 */
-	_nextLevel: function( from, to, translationFn ) {
-		var key, minKey;
-
-		for( key in from ) {
-
-			/**
-			 * For in returns array indices as keys, so let's cast them to numbers
-			 */
-			if( from instanceof Array ) key = parseInt( key, 10 );
-
-			/**
-			 * In case something has extended Object prototypes
-			 */
-			if( !from.hasOwnProperty( key ) ) continue;
-
-			/**
-			 * Translate the key to a one letter substitute
-			 */
-			minKey = this[ translationFn ]( key, this._keys );
-
-			/**
-			 * For Arrays and Objects, create a new Array/Object
-			 * on the minified object and recourse into it
-			 */
-			if( typeof from[ key ] === 'object' ) {
-				to[ minKey ] = from[ key ] instanceof Array ? [] : {};
-				this._nextLevel( from[ key ], to[ minKey ], translationFn );
-
-			/**
-			 * For primitive values (Strings, Numbers, Boolean etc.)
-			 * minify the value
-			 */
-			} else {
-				to[ minKey ] = this[ translationFn ]( from[ key ], this._values );
-			}
-		}
-	},
-
-	/**
-	 * Minifies value based on a dictionary
-	 *
-	 * @param   {String|Boolean} value
-	 * @param   {Array<String|Boolean>} dictionary
-	 *
-	 * @returns {String} The minified version
-	 */
-	_min: function( value, dictionary ) {
-		/**
-		 * If a value actually is a single character, prefix it
-		 * with ___ to avoid mistaking it for a minification code
-		 */
-		if( typeof value === 'string' && value.length === 1 ) {
-			return '___' + value;
-		}
-
-		var index = lm.utils.indexOf( value, dictionary );
-		
-		/**
-		 * value not found in the dictionary, return it unmodified
-		 */
-		if( index === -1 ) {
-			return value;
-
-		/**
-		 * value found in dictionary, return its base36 counterpart
-		 */
-		} else {
-			return index.toString( 36 );
-		}
-	},
-
-	_max: function( value, dictionary ) {
-		/**
-		 * value is a single character. Assume that it's a translation
-		 * and return the original value from the dictionary
-		 */
-		if( typeof value === 'string' && value.length === 1 ) {
-			return dictionary[ parseInt( value, 36 ) ];
-		}
-
-		/**
-		 * value originally was a single character and was prefixed with ___
-		 * to avoid mistaking it for a translation. Remove the prefix
-		 * and return the original character
-		 */
-		if( typeof value === 'string' && value.substr( 0, 3 ) === '___' ) {
-			return value[ 3 ];
-		}
-		/**
-		 * value was not minified
-		 */
-		return value;
-	}
-});
-
-/**
- * An EventEmitter singleton that propagates events
- * across multiple windows. This is a little bit trickier since
- * windows are allowed to open childWindows in their own right
- *
- * This means that we deal with a tree of windows. Hence the rules for event propagation are:
- *
- * - Propagate events from this layout to both parents and children
- * - Propagate events from parent to this and children
- * - Propagate events from children to the other children (but not the emitting one) and the parent
- *
- * @constructor
- * 
- * @param {lm.LayoutManager} layoutManager
- */
-lm.utils.EventHub = function( layoutManager ) {
-	lm.utils.EventEmitter.call( this );
-	this._layoutManager = layoutManager;
-	this._dontPropagateToParent = null;
-	this._childEventSource = null;
-	this.on( lm.utils.EventEmitter.ALL_EVENT, lm.utils.fnBind( this._onEventFromThis, this ) );
-	$(window).on( 'gl_child_event', lm.utils.fnBind( this._onEventFromChild, this ) );
-};
-
-/**
- * Called on every event emitted on this eventHub, regardles of origin.
- *
- * @private
- *
- * @param {Mixed}
- * 
- * @returns {void}
- */
-lm.utils.EventHub.prototype._onEventFromThis = function() {
-	var args = Array.prototype.slice.call( arguments );
-
-	if( this._layoutManager.isSubWindow && args[ 0 ] !== this._dontPropagateToParent ) {
-		this._propagateToParent( args );
-	}
-	this._propagateToChildren( args );
-
-	//Reset
-	this._dontPropagateToParent = null;
-	this._childEventSource = null;
-};
-
-/**
- * Called by the parent layout.
- *
- * @param   {Array} args Event name + arguments
- *
- * @returns {void}
- */
-lm.utils.EventHub.prototype._$onEventFromParent = function( args ) {
-	this._dontPropagateToParent = args[ 0 ];
-	this.emit.apply( this, args );
-};
-
-/**
- * Callback for child events raised on the window
- *
- * @param   {DOMEvent} event
- * @private
- *
- * @returns {void}
- */
-lm.utils.EventHub.prototype._onEventFromChild = function( event ) {
-	this._childEventSource = event.originalEvent.__gl;
-	this.emit.apply( this, event.originalEvent.__glArgs );
-};
-
-/**
- * Propagates the event to the parent by emitting
- * it on the parent's DOM window
- *
- * @param   {Array} args Event name + arguments
- * @private
- *
- * @returns {void}
- */
-lm.utils.EventHub.prototype._propagateToParent = function( args ) {
-	var event,
-		eventName = 'gl_child_event'; 
-
-	if (document.createEvent) {
-		event = window.opener.document.createEvent( 'HTMLEvents' );
-		event.initEvent( eventName, true, true);
-	} else {
-		event = window.opener.document.createEventObject();
-		event.eventType = eventName;
-	}
-
-	event.eventName = eventName;
-	event.__glArgs = args;
-	event.__gl = this._layoutManager;
-
-	if (document.createEvent) {
-		window.opener.dispatchEvent(event);
-	} else {
-		window.opener.fireEvent( 'on' + event.eventType, event );
-	}
-};
-
-/**
- * Propagate events to children
- *
- * @param   {Array} args Event name + arguments
- * @private
- *
- * @returns {void}
- */
-lm.utils.EventHub.prototype._propagateToChildren = function( args ) {
-	var childGl, i;
-
-	for( i = 0; i < this._layoutManager.openPopouts.length; i++ ) {
-		childGl = this._layoutManager.openPopouts[ i ].getGlInstance();
-
-		if( childGl !== this._childEventSource ) {
-			childGl.eventHub._$onEventFromParent( args );
-		}
-	}
-};
-/**
- * A specialised GoldenLayout component that binds GoldenLayout container
- * lifecycle events to react components
- *
- * @constructor
- *
- * @param {lm.container.ItemContainer} container
- * @param {Object} state state is not required for react components
- */
-lm.utils.ReactComponentHandler = function( container, state ) {
-	this._reactComponent = null;
-	this._originalComponentWillUpdate = null;
-	this._container = container;
-	this._initialState = state;
-	this._reactClass = this._getReactClass();
-	this._container.on( 'open', this._render, this );
-	this._container.on( 'destroy', this._destroy, this );
-};
-
-lm.utils.copy( lm.utils.ReactComponentHandler.prototype, {
-
-	/**
-	 * Creates the react class and component and hydrates it with
-	 * the initial state - if one is present
-	 *
-	 * By default, react's getInitialState will be used
-	 *
-	 * @private
-	 * @returns {void}
-	 */
-	_render: function() {
-		this._reactComponent = ReactDOM.render( this._getReactComponent(), this._container.getElement()[ 0 ]);
-		this._originalComponentWillUpdate = this._reactComponent.componentWillUpdate || function(){};
-		this._reactComponent.componentWillUpdate = this._onUpdate.bind( this );
-		if( this._container.getState() ) {
-			this._reactComponent.setState( this._container.getState() );
-		}
-	},
-
-	/**
-	 * Removes the component from the DOM and thus invokes React's unmount lifecycle
-	 *
-	 * @private
-	 * @returns {void}
-	 */
-	_destroy: function() {
-		ReactDOM.unmountComponentAtNode( this._container.getElement()[ 0 ]);
-		this._container.off( 'open', this._render, this );
-		this._container.off( 'destroy', this._destroy, this );
-	},
-
-	/**
-	 * Hooks into React's state management and applies the componentstate
-	 * to GoldenLayout
-	 *
-	 * @private
-	 * @returns {void}
-	 */
-	_onUpdate: function( nextProps, nextState ) {
-		this._container.setState( nextState );
-		this._originalComponentWillUpdate.call( this._reactComponent, nextProps, nextState );
-	},
-
-	/**
-	 * Retrieves the react class from GoldenLayout's registry
-	 *
-	 * @private
-	 * @returns {React.Class}
-	 */
-	_getReactClass: function() {
-		var componentName = this._container._config.component;
-		var reactClass;
-
-		if( !componentName ) {
-			throw new Error( 'No react component name. type: react-component needs a field `component`' );
-		}
-
-		reactClass = this._container.layoutManager.getComponent( componentName );
-
-		if( !reactClass ) {
-			throw new Error( 'React component "' + componentName + '" not found. ' +
-				'Please register all components with GoldenLayout using `registerComponent(name, component)`' );
-		}
-
-		return reactClass;
-	},
-
-	/**
-	 * Copies and extends the properties array and returns the React element
-	 *
-	 * @private
-	 * @returns {React.Element}
-	 */
-	_getReactComponent: function() {
-		var defaultProps = {
-			glEventHub: this._container.layoutManager.eventHub,
-			glContainer: this._container,
-		};
-		var props = $.extend( defaultProps, this._container._config.props );
-		return React.createElement( this._reactClass, props );
-	}
-});})(window.$);
+})(window.$);
